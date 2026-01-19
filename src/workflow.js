@@ -7,6 +7,7 @@ import { Copywriter } from './roles/copywriter.js';
 import { QualityControl } from './roles/quality-control.js';
 import { Manager } from './roles/manager.js';
 import { PublerAPI } from './publer-api.js';
+import { GoogleDrive } from './google-drive.js';
 import { htmlToImage } from './utils/html-to-image.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -22,6 +23,7 @@ export class SocialWorkflow {
     this.qc = null;
     this.manager = null;
     this.publer = null;
+    this.gdrive = null;
 
     this.initialized = false;
   }
@@ -56,6 +58,14 @@ export class SocialWorkflow {
       this.publer = new PublerAPI();
     } catch (e) {
       console.log('   ⚠️  Publer API nem konfigurált (posztolás nem elérhető)');
+    }
+
+    // Google Drive (opcionális)
+    try {
+      this.gdrive = new GoogleDrive();
+      await this.gdrive.initialize();
+    } catch (e) {
+      console.log('   ⚠️  Google Drive nem konfigurált');
     }
 
     this.initialized = true;
@@ -200,7 +210,20 @@ export class SocialWorkflow {
 
       console.log('📸 Kép generálása...');
       const imagePath = await htmlToImage(finalContent.design.html, platform);
-      console.log(`   ✅ Kép mentve: ${imagePath}\n`);
+      console.log(`   ✅ Kép mentve: ${imagePath}`);
+
+      // Google Drive feltöltés
+      let driveFile = null;
+      if (this.gdrive && this.gdrive.drive) {
+        try {
+          console.log('📁 Feltöltés Google Drive-ra...');
+          driveFile = await this.gdrive.uploadToElkeszult(imagePath, platform, contentIdea);
+        } catch (e) {
+          console.log(`   ⚠️  Drive feltöltés sikertelen: ${e.message}`);
+        }
+      }
+
+      console.log('');
 
       // Final package
       return {
@@ -209,7 +232,8 @@ export class SocialWorkflow {
           design: finalContent.design,
           copy: finalContent.copy,
           imagePath: imagePath,
-          platform: platform
+          platform: platform,
+          driveFile: driveFile
         },
         scores: {
           qc: finalContent.qcReport?.overallScore || qcReport.overallScore,
@@ -244,7 +268,7 @@ export class SocialWorkflow {
       throw new Error('Publer API nincs konfigurálva. Állítsd be a PUBLER_API_KEY környezeti változót.');
     }
 
-    const { imagePath, copy, platform } = content;
+    const { imagePath, copy, platform, driveFile } = content;
 
     // Caption összeállítása hashtagekkel
     const hashtags = (copy.hashtags || []).map(h => h.startsWith('#') ? h : `#${h}`).join(' ');
@@ -263,6 +287,15 @@ export class SocialWorkflow {
       console.log(`   ✅ Ütemezve: ${scheduleTime.toLocaleString('hu-HU')}`);
     } else {
       console.log('   ✅ Sikeresen posztolva!');
+    }
+
+    // Google Drive: áthelyezés a "posztolva" mappába
+    if (driveFile && this.gdrive && this.gdrive.drive) {
+      try {
+        await this.gdrive.moveToPosztolva(driveFile.id);
+      } catch (e) {
+        console.log(`   ⚠️  Drive áthelyezés sikertelen: ${e.message}`);
+      }
     }
 
     return result;
